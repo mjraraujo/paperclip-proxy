@@ -19,6 +19,7 @@ import {
   formatDatabaseBackupResult,
   runDatabaseBackup,
   authUsers,
+  invites,
   companies,
   companyMemberships,
   instanceUserRoles,
@@ -200,6 +201,88 @@ export async function startServer(): Promise<StartedServer> {
     }
   }
   
+  async function autoBootstrapAdmin(db: any, auth: any): Promise<void> {
+    const adminEmail = process.env.ADMIN_EMAIL?.trim();
+    const adminPassword = process.env.ADMIN_PASSWORD?.trim();
+    const adminName = process.env.ADMIN_NAME?.trim() || "Admin";
+
+    if (!adminEmail || !adminPassword) return;
+
+    const existingAdmin = await db
+      .select({ id: instanceUserRoles.userId })
+      .from(instanceUserRoles)
+      .where(eq(instanceUserRoles.role, "instance_admin"))
+      .then((rows: Array<{ id: string }>) => rows[0] ?? null);
+
+    if (existingAdmin) {
+      logger.info("Auto-bootstrap skipped: an instance admin already exists");
+      return;
+    }
+
+    logger.info({ email: adminEmail }, "Auto-bootstrapping admin from ADMIN_EMAIL/ADMIN_PASSWORD env vars");
+
+    // Sign up the user via BetterAuth's programmatic API
+    let userId: string | null = null;
+    try {
+      const signUpResult = await auth.api.signUpEmail({
+        body: { email: adminEmail, password: adminPassword, name: adminName },
+      });
+      userId = signUpResult?.user?.id ?? null;
+    } catch (err: any) {
+      // User may already exist — try to find by email instead
+      const existing = await db
+        .select({ id: authUsers.id })
+        .from(authUsers)
+        .where(eq(authUsers.email, adminEmail))
+        .then((rows: Array<{ id: string }>) => rows[0] ?? null);
+      if (existing) {
+        userId = existing.id;
+        logger.info({ email: adminEmail }, "Auto-bootstrap: user already exists, promoting to instance admin");
+      } else {
+        logger.error({ err, email: adminEmail }, "Auto-bootstrap: failed to create admin user");
+        return;
+      }
+    }
+
+    if (!userId) {
+      logger.error({ email: adminEmail }, "Auto-bootstrap: could not resolve user id");
+      return;
+    }
+
+    // Grant instance_admin role directly
+    const { createHash, randomBytes } = await import("node:crypto");
+    const token = `pcp_bootstrap_${randomBytes(24).toString("hex")}`;
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour
+
+    await db.insert(invites).values({
+      inviteType: "bootstrap_ceo",
+      companyId: null,
+      allowedJoinTypes: "human",
+      tokenHash,
+      expiresAt,
+      defaultsPayload: null,
+      invitedByUserId: null,
+    });
+
+    const existingRole = await db
+      .select({ id: instanceUserRoles.id })
+      .from(instanceUserRoles)
+      .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
+      .then((rows: Array<{ id: string }>) => rows[0] ?? null);
+
+    if (!existingRole) {
+      await db.insert(instanceUserRoles).values({ userId, role: "instance_admin" });
+    }
+
+    await db.update(invites)
+      .set({ acceptedAt: now, updatedAt: now })
+      .where(eq(invites.tokenHash, tokenHash));
+
+    logger.info({ email: adminEmail, userId }, "Auto-bootstrap complete: instance admin created");
+  }
+
   const LOCAL_BOARD_USER_ID = "local-board";
   const LOCAL_BOARD_USER_EMAIL = "local@paperclip.local";
   const LOCAL_BOARD_USER_NAME = "Board";
@@ -517,6 +600,7 @@ export async function startServer(): Promise<StartedServer> {
     resolveSession = (req) => resolveBetterAuthSession(auth, req);
     resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);
     await initializeBoardClaimChallenge(db as any, { deploymentMode: config.deploymentMode });
+    await autoBootstrapAdmin(db as any, auth);
     authReady = true;
   }
 

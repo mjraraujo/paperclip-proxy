@@ -29,6 +29,9 @@ services:
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
       PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-paperclip-dev-secret-change-me}"
+      ADMIN_NAME: "${ADMIN_NAME:-Admin}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
     volumes:
       - paperclip-data:/paperclip
     depends_on:

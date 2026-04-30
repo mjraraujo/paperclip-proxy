@@ -16,7 +16,11 @@ function BootstrapPendingPage({ hasActiveInvite = false }: { hasActiveInvite?: b
             : "No instance admin exists yet. Run this command in your Paperclip environment to generate the first admin invite URL:"}
         </p>
         <pre className="mt-4 overflow-x-auto rounded-md border border-border bg-muted/30 p-3 text-xs">
-{`pnpm paperclipai auth bootstrap-ceo`}
+{`# If running via Docker:
+docker exec -it <container> /app/node_modules/.bin/paperclipai auth bootstrap-ceo
+
+# If running locally:
+npx paperclipai auth bootstrap-ceo`}
         </pre>
       </div>
     </div>
