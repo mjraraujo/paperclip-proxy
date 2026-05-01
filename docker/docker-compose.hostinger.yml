@@ -38,6 +38,18 @@ services:
       db:
         condition: service_healthy
 
+  proxy:
+    image: node:lts-trixie-slim
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ./proxy/bin/gateway.js:/app/gateway.js
+    command: ["node", "/app/gateway.js", "--serve"]
+    ports:
+      - "18923:18923"
+    depends_on:
+      - server
+
 volumes:
   pgdata:
   paperclip-data:
