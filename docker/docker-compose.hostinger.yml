@@ -1,3 +1,30 @@
+# Paperclip on Hostinger (or any single-VPS docker host).
+#
+# READ docker/HOSTINGER.md BEFORE BRINGING THIS UP. In particular:
+#   1. Provide real values for every variable below in a `.env` file next to
+#      this compose file. The unset defaults are intentional — the stack will
+#      refuse to start with placeholder secrets on a public host.
+#   2. Run `docker compose -f docker/docker-compose.hostinger.yml \
+#         run --rm --entrypoint "" proxy node /gateway/gateway.js --login`
+#      ONCE before `up -d` so the Codex gateway has a token to use.
+#   3. Put a TLS-terminating reverse proxy (Caddy / nginx / Cloudflare Tunnel)
+#      in front of port 3100 — this stack does not terminate TLS itself.
+#
+# Network model:
+#   The `proxy` service runs the Codex gateway on 127.0.0.1:18923 inside its
+#   own network namespace. The `server` joins that namespace via
+#   `network_mode: service:proxy` so the Claude/Codex adapters' loopback-only
+#   proxy detection (`isProxyAuth`) is satisfied. The 3100 port is therefore
+#   published on the `proxy` service, not on `server`. The gateway port 18923
+#   is intentionally NOT published — it has no auth of its own.
+
+x-required-env: &required-env
+  # Fail fast if these are missing rather than silently using placeholders.
+  PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:?set PAPERCLIP_PUBLIC_URL in .env, e.g. https://paperclip.example.com}"
+  PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:?set PAPERCLIP_ALLOWED_HOSTNAMES in .env, e.g. paperclip.example.com}"
+  PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:?set PAPERCLIP_AGENT_JWT_SECRET in .env (>=32 random chars)}"
+  BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env (>=32 random chars)}"
+
 services:
   db:
     image: postgres:17-alpine
@@ -15,17 +42,19 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   init:
-    image: ghcr.io/paperclipai/paperclip:latest
+    # Pin a digest in production. `:latest` is convenient for first-boot but
+    # makes upgrades silent and irreproducible.
+    image: ${PAPERCLIP_IMAGE:-ghcr.io/paperclipai/paperclip:latest}
     restart: "no"
     environment:
+      <<: *required-env
       DATABASE_URL: postgres://paperclip@db:5432/paperclip
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
-      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
-      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-localhost}"
-      PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:-change-me-please}"
-      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-change-me-please-32-chars-min}"
-      GATEWAY_JS_URL: "${GATEWAY_JS_URL:-https://raw.githubusercontent.com/mjraraujo/paperclip-proxy/main/proxy/bin/gateway.js}"
+      # Pinned to an immutable commit SHA so the download is tamper-evident
+      # by default. Override both vars together when bumping the gateway.
+      GATEWAY_JS_URL: "${GATEWAY_JS_URL:-https://raw.githubusercontent.com/mjraraujo/paperclip-proxy/a21dd8dcb52049484121f36ffa14fc0e2dd92e1d/proxy/bin/gateway.js}"
+      GATEWAY_JS_SHA256: "${GATEWAY_JS_SHA256:-1969397d983b5d5b4ae178970e14e56c0a3f851ff90098a551d95a469acb4ed7}"
     entrypoint: ["sh", "-c"]
     command:
       - |
@@ -37,10 +66,24 @@ services:
         else
           echo "[init] Config already exists"
         fi
-        echo "[init] Generating bootstrap-ceo invite URL"
-        cd /app && pnpm paperclipai auth bootstrap-ceo --force --base-url "$$PAPERCLIP_PUBLIC_URL" || echo "[init] bootstrap-ceo skipped (admin may already exist)"
+        # Run bootstrap-ceo only if no admin invite has been generated yet, so
+        # restarts don't silently invalidate previously-shared invite links.
+        if [ ! -f /paperclip/instances/default/.bootstrap-ceo-done ]; then
+          echo "[init] Generating bootstrap-ceo invite URL"
+          if (cd /app && pnpm paperclipai auth bootstrap-ceo --base-url "$$PAPERCLIP_PUBLIC_URL"); then
+            mkdir -p /paperclip/instances/default
+            touch /paperclip/instances/default/.bootstrap-ceo-done
+          else
+            # Do NOT write the sentinel: a transient failure should retry
+            # next boot. If an admin already exists, the next attempt will
+            # also fail, which is loud-but-harmless.
+            echo "[init] bootstrap-ceo failed (will retry on next start; safe if admin already exists)"
+          fi
+        else
+          echo "[init] bootstrap-ceo already done — skipping"
+        fi
         echo "[init] Downloading gateway.js to shared volume"
-        node -e "const fs=require('fs');const https=require('https');const http=require('http');function f(u,d){d=d||0;if(d>5){console.error('redirects');process.exit(1);}var m=u.startsWith('https')?https:http;m.get(u,function(r){if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){return f(r.headers.location,d+1);}if(r.statusCode!==200){console.error('status',r.statusCode);process.exit(1);}var o=fs.createWriteStream('/gateway/gateway.js');r.pipe(o);o.on('finish',function(){o.close(function(){console.log('gateway.js ok');process.exit(0);});});}).on('error',function(e){console.error(e);process.exit(1);});}f(process.env.GATEWAY_JS_URL);"
+        node -e "const fs=require('fs');const https=require('https');const http=require('http');const crypto=require('crypto');function f(u,d){d=d||0;if(d>5){console.error('too many redirects');process.exit(1);}var m=u.startsWith('https')?https:http;m.get(u,function(r){if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){return f(r.headers.location,d+1);}if(r.statusCode!==200){console.error('status',r.statusCode);process.exit(1);}var o=fs.createWriteStream('/gateway/gateway.js');var h=crypto.createHash('sha256');r.on('data',function(c){h.update(c);});r.pipe(o);o.on('finish',function(){o.close(function(){var got=h.digest('hex');var want=process.env.GATEWAY_JS_SHA256||'';if(want&&got!==want){console.error('gateway.js sha256 mismatch: got '+got+' want '+want);process.exit(1);}console.log('gateway.js ok sha256='+got);process.exit(0);});});}).on('error',function(e){console.error(e);process.exit(1);});}f(process.env.GATEWAY_JS_URL);"
         echo "[init] === Paperclip init complete ==="
     volumes:
       - paperclip-data:/paperclip
@@ -49,48 +92,68 @@ services:
       db:
         condition: service_healthy
 
-  server:
-    image: ghcr.io/paperclipai/paperclip:latest
-    restart: unless-stopped
-    ports:
-      - "3100:3100"
-    environment:
-      DATABASE_URL: postgres://paperclip@db:5432/paperclip
-      PORT: "3100"
-      SERVE_UI: "true"
-      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
-      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
-      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
-      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-localhost}"
-      PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:-change-me-please}"
-      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-change-me-please-32-chars-min}"
-    volumes:
-      - paperclip-data:/paperclip
-      - codex-gateway-data:/paperclip/.codex-gateway
-    depends_on:
-      db:
-        condition: service_healthy
-      init:
-        condition: service_completed_successfully
-
+  # The Codex gateway. Owns the published 3100 port on behalf of `server`,
+  # which joins this namespace via network_mode: service:proxy so it can
+  # reach the gateway on 127.0.0.1:18923 (the only host the adapters trust).
   proxy:
     image: node:lts-trixie-slim
     restart: unless-stopped
     working_dir: /gateway
     environment:
       HOME: /data
-      PROXY_BIND: 0.0.0.0
+      # Loopback only — the server shares this namespace, no one else needs in.
+      PROXY_BIND: 127.0.0.1
     command: ["node", "/gateway/gateway.js", "--serve"]
     volumes:
       - gateway-bin:/gateway:ro
       - codex-gateway-data:/data/.codex-gateway
     ports:
-      - "18923:18923"
+      # Published on behalf of the server (which shares this netns). 18923 is
+      # intentionally NOT published — gateway has no auth of its own.
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:18923/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     depends_on:
       init:
         condition: service_completed_successfully
-      server:
-        condition: service_started
+
+  server:
+    image: ${PAPERCLIP_IMAGE:-ghcr.io/paperclipai/paperclip:latest}
+    restart: unless-stopped
+    # Share the proxy's network namespace so ANTHROPIC_BASE_URL=127.0.0.1:18923
+    # actually resolves to the gateway and `isProxyAuth` accepts it.
+    network_mode: "service:proxy"
+    environment:
+      <<: *required-env
+      DATABASE_URL: postgres://paperclip@db:5432/paperclip
+      PORT: "3100"
+      SERVE_UI: "true"
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      # Route Claude Code and Codex CLI runs through the local gateway.
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:18923"
+      OPENAI_BASE_URL: "http://127.0.0.1:18923"
+      ANTHROPIC_API_KEY: "sk-proxy-dummy"
+      PAPERCLIP_PROXY_MODE: "1"
+    volumes:
+      - paperclip-data:/paperclip
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3100/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+      proxy:
+        condition: service_healthy
 
 volumes:
   pgdata:
