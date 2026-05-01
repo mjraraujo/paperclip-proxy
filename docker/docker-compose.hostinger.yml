@@ -15,7 +15,10 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   server:
-    image: ghcr.io/paperclipai/paperclip:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: paperclip-proxy-server:latest
     restart: unless-stopped
     ports:
       - "3100:3100"
@@ -40,19 +43,14 @@ services:
         condition: service_healthy
 
   proxy:
-    image: node:lts-trixie-slim
+    image: paperclip-proxy-server:latest
     restart: unless-stopped
     working_dir: /app
+    entrypoint: []
     environment:
       HOME: /data
       PROXY_BIND: 0.0.0.0
-      GATEWAY_JS_URL: "${GATEWAY_JS_URL:-https://raw.githubusercontent.com/mjraraujo/paperclip-proxy/main/proxy/bin/gateway.js}"
-    command:
-      [
-        "sh",
-        "-c",
-        "node -e \"const fs=require('fs');const https=require('https');const http=require('http');function fetch(url,depth=0){if(depth>5){console.error('Too many redirects');process.exit(1);}const mod=url.startsWith('https')?https:http;mod.get(url,res=>{if(res.statusCode>=300&&res.statusCode<400&&res.headers.location){return fetch(res.headers.location,depth+1);}if(res.statusCode!==200){console.error('Failed to download gateway.js:',res.statusCode);process.exit(1);}const out=fs.createWriteStream('/app/gateway.js');res.pipe(out);out.on('finish',()=>out.close(()=>process.exit(0)));}).on('error',err=>{console.error(err);process.exit(1);});}fetch(process.env.GATEWAY_JS_URL);\" && node /app/gateway.js --serve"
-      ]
+    command: ["node", "/app/proxy/bin/gateway.js", "--serve"]
     volumes:
       - codex-gateway-data:/data/.codex-gateway
     ports:
