@@ -69,3 +69,7 @@ docker run --name paperclip \
 ```
 
 Without API keys, the app runs normally — adapter environment checks will surface missing prerequisites.
+
+## Single-VPS Deployment (Hostinger / any Docker host)
+
+For an internet-facing single-VPS deployment that routes Claude/Codex runs through a local OpenAI gateway (so you don't pay Anthropic/OpenAI credits for in-app runs), see [`docker/HOSTINGER.md`](https://github.com/mjraraujo/paperclip-proxy/blob/main/docker/HOSTINGER.md). It pairs with [`docker/docker-compose.hostinger.yml`](https://github.com/mjraraujo/paperclip-proxy/blob/main/docker/docker-compose.hostinger.yml) and a copy-paste [`docker/.env.example`](https://github.com/mjraraujo/paperclip-proxy/blob/main/docker/.env.example).

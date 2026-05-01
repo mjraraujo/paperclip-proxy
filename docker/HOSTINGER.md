@@ -23,7 +23,14 @@ The gateway port (`18923`) is intentionally never published — it has no auth o
 
 ## One-time setup
 
-1. **Create a `.env` next to the compose file.** The stack refuses to start without these:
+1. **Create a `.env` next to the compose file.** The stack refuses to start without these. The repo ships a [`docker/.env.example`](./.env.example) you can copy:
+
+   ```sh
+   cp docker/.env.example docker/.env
+   $EDITOR docker/.env
+   ```
+
+   Required keys:
 
    ```env
    PAPERCLIP_PUBLIC_URL=https://paperclip.example.com
@@ -32,8 +39,8 @@ The gateway port (`18923`) is intentionally never published — it has no auth o
    BETTER_AUTH_SECRET=$(openssl rand -hex 32)
    # Optional: pin the Paperclip image to a specific tag/digest
    # PAPERCLIP_IMAGE=ghcr.io/paperclipai/paperclip@sha256:...
-   # Optional: pin gateway.js to a commit + verify checksum
-   # GATEWAY_JS_URL=https://raw.githubusercontent.com/mjraraujo/paperclip-proxy/<sha>/proxy/bin/gateway.js
+   # Optional: override the (already pinned) gateway.js source
+   # GATEWAY_JS_URL=https://raw.githubusercontent.com/mjraraujo/paperclip-proxy/<commit-sha>/proxy/bin/gateway.js
    # GATEWAY_JS_SHA256=<sha256 of that file>
    ```
 
@@ -97,4 +104,4 @@ You should see `POST /v1/messages` (Claude) or `POST /v1/responses` (Codex) entr
 ## Upgrading
 
 - Pin `PAPERCLIP_IMAGE` to a digest in `.env`. Bump it in a single commit so rollbacks are obvious.
-- When updating `gateway.js`, also bump `GATEWAY_JS_URL` (to the new commit SHA, not `main`) and `GATEWAY_JS_SHA256`. The `init` downloader verifies the hash and aborts on mismatch.
+- When updating `gateway.js`, override `GATEWAY_JS_URL` (point at the new commit SHA, never `main`) and `GATEWAY_JS_SHA256` together in `.env`. The compose file ships a pinned-by-default pair; `init` verifies the hash and aborts on mismatch.

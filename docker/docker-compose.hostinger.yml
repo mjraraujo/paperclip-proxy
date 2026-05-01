@@ -51,9 +51,10 @@ services:
       DATABASE_URL: postgres://paperclip@db:5432/paperclip
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
-      # Pin to a specific commit + verify checksum in production.
-      GATEWAY_JS_URL: "${GATEWAY_JS_URL:-https://raw.githubusercontent.com/mjraraujo/paperclip-proxy/main/proxy/bin/gateway.js}"
-      GATEWAY_JS_SHA256: "${GATEWAY_JS_SHA256:-}"
+      # Pinned to an immutable commit SHA so the download is tamper-evident
+      # by default. Override both vars together when bumping the gateway.
+      GATEWAY_JS_URL: "${GATEWAY_JS_URL:-https://raw.githubusercontent.com/mjraraujo/paperclip-proxy/a21dd8dcb52049484121f36ffa14fc0e2dd92e1d/proxy/bin/gateway.js}"
+      GATEWAY_JS_SHA256: "${GATEWAY_JS_SHA256:-1969397d983b5d5b4ae178970e14e56c0a3f851ff90098a551d95a469acb4ed7}"
     entrypoint: ["sh", "-c"]
     command:
       - |

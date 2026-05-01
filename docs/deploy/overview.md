@@ -40,7 +40,7 @@ Paperclip supports three deployment configurations, from zero-friction local to 
 
 - **Just trying Paperclip?** Use `local_trusted` (the default)
 - **Sharing with a team on private network?** Use `authenticated` + `private`
-- **Deploying to the cloud?** Use `authenticated` + `public` — see [AWS ECS Fargate guide](aws-ecs.md)
+- **Deploying to the cloud?** Use `authenticated` + `public` — see the [AWS ECS Fargate guide](aws-ecs.md) or, for a single-VPS Docker host, [`docker/HOSTINGER.md`](https://github.com/mjraraujo/paperclip-proxy/blob/main/docker/HOSTINGER.md)
 
 Set the mode during onboarding:
 
