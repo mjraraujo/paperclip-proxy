@@ -4,8 +4,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: paperclip
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-paperclip}
       POSTGRES_DB: paperclip
+      POSTGRES_HOST_AUTH_METHOD: trust
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
       interval: 2s
@@ -18,28 +18,33 @@ services:
     image: ghcr.io/paperclipai/paperclip:latest
     restart: "no"
     environment:
-      DATABASE_URL: postgres://paperclip:${POSTGRES_PASSWORD:-paperclip}@db:5432/paperclip
+      DATABASE_URL: postgres://paperclip@db:5432/paperclip
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
-      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://217.15.175.92:3100}"
-      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-srv1046654.hstgr.cloud,217.15.175.92,217.15.175.92:3100,localhost}"
-      PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:-7f0b9f1f2d5646cb9f8a1e5cb7a62d8c}"
-      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-7f0b9f1f2d5646cb9f8a1e5cb7a62d8c-paperclip-better-auth}"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
+      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-localhost}"
+      PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:-change-me-please}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-change-me-please-32-chars-min}"
+      GATEWAY_JS_URL: "${GATEWAY_JS_URL:-https://raw.githubusercontent.com/mjraraujo/paperclip-proxy/main/proxy/bin/gateway.js}"
     entrypoint: ["sh", "-c"]
     command:
       - |
         set -e
+        echo "[init] === Paperclip init starting ==="
         if [ ! -f /paperclip/instances/default/config.json ]; then
           echo "[init] Running paperclip onboard --yes"
           cd /app && pnpm paperclipai onboard --yes
         else
-          echo "[init] Config already exists, skipping onboard"
+          echo "[init] Config already exists"
         fi
         echo "[init] Generating bootstrap-ceo invite URL"
-        cd /app && pnpm paperclipai auth bootstrap-ceo --force --base-url "$$PAPERCLIP_PUBLIC_URL" || echo "[init] bootstrap-ceo finished (non-zero exit ok if admin already exists)"
-        echo "[init] Done"
+        cd /app && pnpm paperclipai auth bootstrap-ceo --force --base-url "$$PAPERCLIP_PUBLIC_URL" || echo "[init] bootstrap-ceo skipped (admin may already exist)"
+        echo "[init] Downloading gateway.js to shared volume"
+        node -e "const fs=require('fs');const https=require('https');const http=require('http');function f(u,d){d=d||0;if(d>5){console.error('redirects');process.exit(1);}var m=u.startsWith('https')?https:http;m.get(u,function(r){if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){return f(r.headers.location,d+1);}if(r.statusCode!==200){console.error('status',r.statusCode);process.exit(1);}var o=fs.createWriteStream('/gateway/gateway.js');r.pipe(o);o.on('finish',function(){o.close(function(){console.log('gateway.js ok');process.exit(0);});});}).on('error',function(e){console.error(e);process.exit(1);});}f(process.env.GATEWAY_JS_URL);"
+        echo "[init] === Paperclip init complete ==="
     volumes:
       - paperclip-data:/paperclip
+      - gateway-bin:/gateway
     depends_on:
       db:
         condition: service_healthy
@@ -50,18 +55,15 @@ services:
     ports:
       - "3100:3100"
     environment:
-      DATABASE_URL: postgres://paperclip:${POSTGRES_PASSWORD:-paperclip}@db:5432/paperclip
+      DATABASE_URL: postgres://paperclip@db:5432/paperclip
       PORT: "3100"
       SERVE_UI: "true"
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
-      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://217.15.175.92:3100}"
-      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-srv1046654.hstgr.cloud,217.15.175.92,217.15.175.92:3100,localhost}"
-      PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:-7f0b9f1f2d5646cb9f8a1e5cb7a62d8c}"
-      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-7f0b9f1f2d5646cb9f8a1e5cb7a62d8c-paperclip-better-auth}"
-      ADMIN_NAME: "${ADMIN_NAME:-Admin}"
-      ADMIN_EMAIL: "${ADMIN_EMAIL:-admin@example.com}"
-      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-4d7c2c1f8e2a4a27a0e6d1f0db7e6b93}"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
+      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-localhost}"
+      PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:-change-me-please}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-change-me-please-32-chars-min}"
     volumes:
       - paperclip-data:/paperclip
       - codex-gateway-data:/paperclip/.codex-gateway
@@ -74,25 +76,24 @@ services:
   proxy:
     image: node:lts-trixie-slim
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /gateway
     environment:
       HOME: /data
       PROXY_BIND: 0.0.0.0
-      GATEWAY_JS_URL: "${GATEWAY_JS_URL:-https://raw.githubusercontent.com/mjraraujo/paperclip-proxy/main/proxy/bin/gateway.js}"
-    command:
-      [
-        "sh",
-        "-c",
-        "node -e \"const fs=require('fs');const https=require('https');const http=require('http');function fetch(url,depth=0){if(depth>5){console.error('Too many redirects');process.exit(1);}const mod=url.startsWith('https')?https:http;mod.get(url,res=>{if(res.statusCode>=300&&res.statusCode<400&&res.headers.location){return fetch(res.headers.location,depth+1);}if(res.statusCode!==200){console.error('Failed to download gateway.js:',res.statusCode);process.exit(1);}const out=fs.createWriteStream('/app/gateway.js');res.pipe(out);out.on('finish',()=>out.close(()=>process.exit(0)));}).on('error',err=>{console.error(err);process.exit(1);});}fetch(process.env.GATEWAY_JS_URL);\" && node /app/gateway.js --serve"
-      ]
+    command: ["node", "/gateway/gateway.js", "--serve"]
     volumes:
+      - gateway-bin:/gateway:ro
       - codex-gateway-data:/data/.codex-gateway
     ports:
       - "18923:18923"
     depends_on:
-      - server
+      init:
+        condition: service_completed_successfully
+      server:
+        condition: service_started
 
 volumes:
   pgdata:
   paperclip-data:
+  gateway-bin:
   codex-gateway-data:
