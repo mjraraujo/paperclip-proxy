@@ -32,6 +32,7 @@ services:
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
     volumes:
       - paperclip-data:/paperclip
+      - codex-gateway-data:/paperclip/.codex-gateway
     depends_on:
       db:
         condition: service_healthy
@@ -40,9 +41,18 @@ services:
     image: node:lts-trixie-slim
     restart: unless-stopped
     working_dir: /app
+    environment:
+      HOME: /data
+      PROXY_BIND: 0.0.0.0
+      GATEWAY_JS_URL: "${GATEWAY_JS_URL:-https://raw.githubusercontent.com/mjraraujo/paperclip-proxy/main/proxy/bin/gateway.js}"
+    command:
+      [
+        "sh",
+        "-c",
+        "node -e \"const fs=require('fs');const https=require('https');const http=require('http');function fetch(url,depth=0){if(depth>5){console.error('Too many redirects');process.exit(1);}const mod=url.startsWith('https')?https:http;mod.get(url,res=>{if(res.statusCode>=300&&res.statusCode<400&&res.headers.location){return fetch(res.headers.location,depth+1);}if(res.statusCode!==200){console.error('Failed to download gateway.js:',res.statusCode);process.exit(1);}const out=fs.createWriteStream('/app/gateway.js');res.pipe(out);out.on('finish',()=>out.close(()=>process.exit(0)));}).on('error',err=>{console.error(err);process.exit(1);});}fetch(process.env.GATEWAY_JS_URL);\" && node /app/gateway.js --serve"
+      ]
     volumes:
-      - ../proxy/bin/gateway.js:/tmp/gateway.js:ro
-    command: ["sh", "-c", "cp /tmp/gateway.js /app/gateway.js && node /app/gateway.js --serve"]
+      - codex-gateway-data:/data/.codex-gateway
     ports:
       - "18923:18923"
     depends_on:
@@ -51,3 +61,4 @@ services:
 volumes:
   pgdata:
   paperclip-data:
+  codex-gateway-data:

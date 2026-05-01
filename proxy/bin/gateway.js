@@ -603,16 +603,18 @@ function startProxy(config, accessToken, accountId) {
       });
     });
 
-    // Bind to loopback only. The proxy has no authentication of its
-    // own (it relies on the OAuth token cached at ~/.codex-gateway), so
-    // it must never be reachable from a non-local network. In the
-    // Docker image Mission Control runs in the same container and
-    // reaches us over container loopback, so 127.0.0.1 is sufficient.
-    server.listen(PROXY_PORT, '127.0.0.1', () => {
-      console.log(`  ✅ Proxy running on http://127.0.0.1:${PROXY_PORT}`);
-      console.log(`  📡 Anthropic translation: POST http://127.0.0.1:${PROXY_PORT}/v1/messages (for Claude)`);
-      console.log(`  📡 Codex passthrough:     POST http://127.0.0.1:${PROXY_PORT}/v1/responses (for Codex)`);
-      console.log(`  💚 Health check:          GET  http://127.0.0.1:${PROXY_PORT}/health`);
+    // Bind to loopback only by default. The proxy has no authentication
+    // of its own (it relies on the OAuth token cached at ~/.codex-gateway),
+    // so it should not be reachable from a non-local network unless the
+    // operator explicitly opts in via PROXY_BIND (e.g. when running the
+    // proxy as a separate compose service that the server reaches over
+    // a private docker network).
+    const bindHost = process.env.PROXY_BIND || '127.0.0.1';
+    server.listen(PROXY_PORT, bindHost, () => {
+      console.log(`  ✅ Proxy running on http://${bindHost}:${PROXY_PORT}`);
+      console.log(`  📡 Anthropic translation: POST http://${bindHost}:${PROXY_PORT}/v1/messages (for Claude)`);
+      console.log(`  📡 Codex passthrough:     POST http://${bindHost}:${PROXY_PORT}/v1/responses (for Codex)`);
+      console.log(`  💚 Health check:          GET  http://${bindHost}:${PROXY_PORT}/health`);
       resolve(server);
     });
   });
