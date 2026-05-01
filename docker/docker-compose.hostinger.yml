@@ -14,11 +14,38 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  init:
+    image: ghcr.io/paperclipai/paperclip:latest
+    restart: "no"
+    environment:
+      DATABASE_URL: postgres://paperclip:${POSTGRES_PASSWORD:-paperclip}@db:5432/paperclip
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://217.15.175.92:3100}"
+      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-srv1046654.hstgr.cloud,217.15.175.92,217.15.175.92:3100,localhost}"
+      PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:-7f0b9f1f2d5646cb9f8a1e5cb7a62d8c}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-7f0b9f1f2d5646cb9f8a1e5cb7a62d8c-paperclip-better-auth}"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ ! -f /paperclip/instances/default/config.json ]; then
+          echo "[init] Running paperclip onboard --yes"
+          cd /app && pnpm paperclipai onboard --yes
+        else
+          echo "[init] Config already exists, skipping onboard"
+        fi
+        echo "[init] Generating bootstrap-ceo invite URL"
+        cd /app && pnpm paperclipai auth bootstrap-ceo --force --base-url "$$PAPERCLIP_PUBLIC_URL" || echo "[init] bootstrap-ceo finished (non-zero exit ok if admin already exists)"
+        echo "[init] Done"
+    volumes:
+      - paperclip-data:/paperclip
+    depends_on:
+      db:
+        condition: service_healthy
+
   server:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: paperclip-proxy-server:latest
+    image: ghcr.io/paperclipai/paperclip:latest
     restart: unless-stopped
     ports:
       - "3100:3100"
@@ -41,16 +68,23 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      init:
+        condition: service_completed_successfully
 
   proxy:
-    image: paperclip-proxy-server:latest
+    image: node:lts-trixie-slim
     restart: unless-stopped
     working_dir: /app
-    entrypoint: []
     environment:
       HOME: /data
       PROXY_BIND: 0.0.0.0
-    command: ["node", "/app/proxy/bin/gateway.js", "--serve"]
+      GATEWAY_JS_URL: "${GATEWAY_JS_URL:-https://raw.githubusercontent.com/mjraraujo/paperclip-proxy/main/proxy/bin/gateway.js}"
+    command:
+      [
+        "sh",
+        "-c",
+        "node -e \"const fs=require('fs');const https=require('https');const http=require('http');function fetch(url,depth=0){if(depth>5){console.error('Too many redirects');process.exit(1);}const mod=url.startsWith('https')?https:http;mod.get(url,res=>{if(res.statusCode>=300&&res.statusCode<400&&res.headers.location){return fetch(res.headers.location,depth+1);}if(res.statusCode!==200){console.error('Failed to download gateway.js:',res.statusCode);process.exit(1);}const out=fs.createWriteStream('/app/gateway.js');res.pipe(out);out.on('finish',()=>out.close(()=>process.exit(0)));}).on('error',err=>{console.error(err);process.exit(1);});}fetch(process.env.GATEWAY_JS_URL);\" && node /app/gateway.js --serve"
+      ]
     volumes:
       - codex-gateway-data:/data/.codex-gateway
     ports:
