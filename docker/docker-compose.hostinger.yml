@@ -25,13 +25,13 @@ services:
       SERVE_UI: "true"
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
-      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
-      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-localhost}"
-      PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:-change-me}"
-      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-paperclip-dev-secret-change-me}"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://217.15.175.92:3100}"
+      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-srv1046654.hstgr.cloud,217.15.175.92,217.15.175.92:3100,localhost}"
+      PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:-7f0b9f1f2d5646cb9f8a1e5cb7a62d8c}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-7f0b9f1f2d5646cb9f8a1e5cb7a62d8c-paperclip-better-auth}"
       ADMIN_NAME: "${ADMIN_NAME:-Admin}"
-      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
-      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-admin@example.com}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-4d7c2c1f8e2a4a27a0e6d1f0db7e6b93}"
     volumes:
       - paperclip-data:/paperclip
       - codex-gateway-data:/paperclip/.codex-gateway
