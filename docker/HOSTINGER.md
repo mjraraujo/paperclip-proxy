@@ -23,7 +23,15 @@ The gateway port (`18923`) is intentionally never published — it has no auth o
 
 ## One-time setup
 
-1. **Create a `.env` next to the compose file.** The stack refuses to start without these. The repo ships a [`docker/.env.example`](./.env.example) you can copy:
+1. **Create a `.env` next to the compose file.** The stack still requires the
+   two domain-specific values (`PAPERCLIP_PUBLIC_URL` and
+   `PAPERCLIP_ALLOWED_HOSTNAMES`) — compose interpolation fails fast without
+   them, since they cannot be sensibly auto-generated. The two random secrets
+   (`BETTER_AUTH_SECRET`, `PAPERCLIP_AGENT_JWT_SECRET`) are **optional**: the
+   `init` service generates 32 random bytes for any that are unset and writes
+   them to `/paperclip/.secrets/` on the persistent `paperclip-data` volume,
+   where they are reloaded on every restart. The repo ships a
+   [`docker/.env.example`](./.env.example) you can copy:
 
    ```sh
    cp docker/.env.example docker/.env
@@ -35,8 +43,9 @@ The gateway port (`18923`) is intentionally never published — it has no auth o
    ```env
    PAPERCLIP_PUBLIC_URL=https://paperclip.example.com
    PAPERCLIP_ALLOWED_HOSTNAMES=paperclip.example.com
-   PAPERCLIP_AGENT_JWT_SECRET=$(openssl rand -hex 32)
-   BETTER_AUTH_SECRET=$(openssl rand -hex 32)
+   # Optional — auto-generated and persisted by `init` if omitted:
+   # PAPERCLIP_AGENT_JWT_SECRET=$(openssl rand -hex 32)
+   # BETTER_AUTH_SECRET=$(openssl rand -hex 32)
    # Optional: pin the Paperclip image to a specific tag/digest
    # PAPERCLIP_IMAGE=ghcr.io/paperclipai/paperclip@sha256:...
    # Optional: override the (already pinned) gateway.js source
@@ -44,7 +53,10 @@ The gateway port (`18923`) is intentionally never published — it has no auth o
    # GATEWAY_JS_SHA256=<sha256 of that file>
    ```
 
-   Generate the two secrets fresh — never reuse the old `change-me-please` defaults.
+   If you do supply the secrets via `.env`, `init` persists those values to
+   the `.secrets/` files (so removing the env later still works). Replacing
+   the volume — or deleting `/paperclip/.secrets/` — will invalidate every
+   active session and agent JWT, so treat them as durable state.
 
 2. **Bootstrap the gateway token.** The proxy's `--serve` mode polls a `token.json` written by an interactive OpenAI device-code login. Do that once before bringing the stack up:
 
@@ -98,7 +110,8 @@ You should see `POST /v1/messages` (Claude) or `POST /v1/responses` (Codex) entr
 | `proxy` container running but every Claude run still costs Anthropic credits | `ANTHROPIC_BASE_URL` not set, or hostname not loopback | Use this compose file unmodified; do not change `network_mode`. |
 | `proxy` logs `⏳ No token yet — waiting for web dashboard login...` forever | Step 2 above was skipped | Run the `--login` one-shot, then `docker compose restart proxy`. |
 | `init` fails on first boot with `gateway.js sha256 mismatch` | `GATEWAY_JS_SHA256` set but doesn't match the URL contents | Recompute the checksum or unset the variable. |
-| `compose up` errors with `required variable ... is missing a value` | Missing `.env` keys | Add the variable; the stack intentionally refuses defaults. |
+| `compose up` errors with `required variable ... is missing a value` | Missing `PAPERCLIP_PUBLIC_URL` or `PAPERCLIP_ALLOWED_HOSTNAMES` in `.env` | Add the variable; these two are domain-specific and intentionally have no default. The two random secrets are auto-generated, so you should only see this for the URL/hostnames pair. |
+| `[server] missing /paperclip/.secrets/...` on server start | `init` did not run (volume not mounted, or service skipped) | Ensure the `paperclip-data` volume is shared between `init` and `server` and that `init` completed successfully (`docker compose logs init`). |
 | Browser sees "host not allowed" / redirects to localhost | `PAPERCLIP_ALLOWED_HOSTNAMES` / `PAPERCLIP_PUBLIC_URL` don't match the public hostname | Set both to the real domain you serve over TLS. |
 
 ## Upgrading

@@ -19,11 +19,17 @@
 #   is intentionally NOT published — it has no auth of its own.
 
 x-required-env: &required-env
-  # Fail fast if these are missing rather than silently using placeholders.
+  # Operator MUST set these — they depend on the deployment's real domain and
+  # cannot be auto-generated. Compose interpolation fails fast if missing.
   PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:?set PAPERCLIP_PUBLIC_URL in .env, e.g. https://paperclip.example.com}"
   PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:?set PAPERCLIP_ALLOWED_HOSTNAMES in .env, e.g. paperclip.example.com}"
-  PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:?set PAPERCLIP_AGENT_JWT_SECRET in .env (>=32 random chars)}"
-  BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env (>=32 random chars)}"
+  # Random secrets — left unguarded on purpose. If the operator does not
+  # provide them, the `init` service generates 32 random bytes and persists
+  # them to /paperclip/.secrets/ on the paperclip-data volume; the `server`
+  # entrypoint wrapper then loads them from there on boot. Persisted across
+  # restarts so existing sessions/JWTs remain valid.
+  PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:-}"
+  BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-}"
 
 services:
   db:
@@ -60,6 +66,39 @@ services:
       - |
         set -e
         echo "[init] === Paperclip init starting ==="
+        # --- Secret bootstrap ---------------------------------------------
+        # Generate persistent random secrets on first boot if the operator
+        # didn't supply them via .env. Stored on the paperclip-data volume so
+        # they survive restarts (changing them would invalidate every active
+        # session and agent JWT).
+        mkdir -p /paperclip/.secrets
+        chmod 700 /paperclip/.secrets
+        # bootstrap_secret <ENV_VAR_NAME> <file-basename>
+        bootstrap_secret() {
+          name="$$1"; file="/paperclip/.secrets/$$2"
+          eval "cur=\$$$$name"
+          if [ -n "$$cur" ]; then
+            if [ ! -s "$$file" ] || [ "$$(cat "$$file")" != "$$cur" ]; then
+              printf '%s' "$$cur" > "$$file"
+              chmod 600 "$$file"
+              echo "[init] Persisted operator-provided $$name to $$file"
+            fi
+          else
+            if [ ! -s "$$file" ]; then
+              node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" > "$$file"
+              chmod 600 "$$file"
+              echo "[init] Generated random $$name (32 bytes) -> $$file"
+            else
+              echo "[init] Reusing existing $$name from $$file"
+            fi
+          fi
+        }
+        bootstrap_secret BETTER_AUTH_SECRET better_auth_secret
+        bootstrap_secret PAPERCLIP_AGENT_JWT_SECRET paperclip_agent_jwt_secret
+        # Export so onboard / bootstrap-ceo see them this run.
+        export BETTER_AUTH_SECRET="$$(cat /paperclip/.secrets/better_auth_secret)"
+        export PAPERCLIP_AGENT_JWT_SECRET="$$(cat /paperclip/.secrets/paperclip_agent_jwt_secret)"
+        # ------------------------------------------------------------------
         if [ ! -f /paperclip/instances/default/config.json ]; then
           echo "[init] Running paperclip onboard --yes"
           cd /app && pnpm paperclipai onboard --yes
@@ -139,6 +178,28 @@ services:
       OPENAI_BASE_URL: "http://127.0.0.1:18923"
       ANTHROPIC_API_KEY: "sk-proxy-dummy"
       PAPERCLIP_PROXY_MODE: "1"
+    # Wrap the upstream entrypoint so secrets bootstrapped by `init` (or
+    # supplied via .env and persisted there) are loaded into the env before
+    # the server starts. The original ENTRYPOINT/CMD from the image are:
+    #   ENTRYPOINT ["docker-entrypoint.sh"]
+    #   CMD ["node","--import","./server/node_modules/tsx/dist/loader.mjs","server/dist/index.js"]
+    # If you bump the upstream image and the CMD changes, update this too.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        sec=/paperclip/.secrets
+        for f in better_auth_secret paperclip_agent_jwt_secret; do
+          if [ ! -s "$$sec/$$f" ]; then
+            echo "[server] missing $$sec/$$f — did the init service run?" >&2
+            exit 1
+          fi
+        done
+        export BETTER_AUTH_SECRET="$$(cat $$sec/better_auth_secret)"
+        export PAPERCLIP_AGENT_JWT_SECRET="$$(cat $$sec/paperclip_agent_jwt_secret)"
+        exec /usr/local/bin/docker-entrypoint.sh \
+          node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js
     volumes:
       - paperclip-data:/paperclip
     healthcheck:
